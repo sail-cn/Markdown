@@ -18,13 +18,14 @@ struct FileBrowserView: View {
     @State private var errorMessage: String?
     @State private var showingFilePicker = false
     @State private var openedExternalFile: FileItem?
+    @EnvironmentObject var documentHandler: DocumentHandler
     
     init(directory: URL = FileManager.default.documentsDirectory) {
         self._currentDirectory = State(initialValue: directory)
     }
     
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: .constant(.all)) {
             VStack {
                 if isLoading {
                     ProgressView("加载中...")
@@ -36,8 +37,41 @@ struct FileBrowserView: View {
                 }
             }
             .navigationTitle("文件浏览器")
+            .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 300)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    // 历史记录菜单
+                    Menu {
+                        let history = FileManager.default.getExternalFileHistory()
+                        if history.isEmpty {
+                            Text("暂无历史记录")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(Array(history.enumerated()), id: \.offset) { index, filePath in
+                                if FileManager.default.fileExists(atPath: filePath) {
+                                    Button(action: {
+                                        openRecentFile(filePath)
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "doc.text")
+                                            Text(URL(fileURLWithPath: filePath).lastPathComponent)
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if !history.isEmpty {
+                                Divider()
+                                Button("清除历史记录") {
+                                    UserDefaults.standard.removeObject(forKey: "externalFileHistory")
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .help("最近打开的文件")
+                    
                     Button("打开文件") {
                         openFileFromSystem()
                     }
@@ -52,6 +86,13 @@ struct FileBrowserView: View {
             .onAppear {
                 setupInitialFiles()
                 loadFiles()
+                loadFeaturesFile()
+            }
+            .onChange(of: documentHandler.pendingFileURL) { _, newURL in
+                if let url = newURL {
+                    handleExternalFile(url)
+                    documentHandler.clearPendingFile()
+                }
             }
             .alert("错误", isPresented: .constant(errorMessage != nil)) {
                 Button("确定") {
@@ -65,8 +106,10 @@ struct FileBrowserView: View {
         } detail: {
             if let selectedFile = selectedFile, selectedFile.isMarkdownFile {
                 MarkdownDetailView(fileItem: selectedFile)
+                    .id(selectedFile.url.absoluteString)
             } else if let openedFile = openedExternalFile {
                 MarkdownDetailView(fileItem: openedFile)
+                    .id(openedFile.url.absoluteString)
             } else {
                 VStack(spacing: 20) {
                     Image(systemName: "doc.text")
@@ -83,6 +126,38 @@ struct FileBrowserView: View {
                     .help("选择系统中的 Markdown 文件")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+    
+    private func loadFeaturesFile() {
+        // 首先尝试加载上次打开的文件
+        if let lastFileURL = FileManager.default.getLastOpenedFileURL() {
+            let lastFile = FileItem(url: lastFileURL)
+            if lastFile.isMarkdownFile {
+                // 判断是否为外部文件（不在Documents目录中）
+                if !lastFileURL.path.hasPrefix(FileManager.default.documentsDirectory.path) {
+                    // 外部文件需要开始访问安全范围资源
+                    if lastFileURL.startAccessingSecurityScopedResource() {
+                        documentHandler.securityScopedURLs.append(lastFileURL)
+                    }
+                    openedExternalFile = lastFile
+                    selectedFile = nil
+                } else {
+                    selectedFile = lastFile
+                    openedExternalFile = nil
+                }
+                return
+            }
+        }
+        
+        // 如果没有上次打开的文件，则自动加载Features.md文件
+        let featuresURL = FileManager.default.documentsDirectory.appendingPathComponent("Features.md")
+        if FileManager.default.fileExists(atPath: featuresURL.path) {
+            let featuresFile = FileItem(url: featuresURL)
+            if featuresFile.isMarkdownFile {
+                selectedFile = featuresFile
+                FileManager.default.saveLastOpenedFile(featuresURL)
             }
         }
     }
@@ -113,6 +188,36 @@ struct FileBrowserView: View {
                     openFileFromSystem()
                 }
                 .buttonStyle(.borderedProminent)
+            }
+            
+            // 显示外部文件历史记录
+            let externalHistory = FileManager.default.getExternalFileHistory()
+            if !externalHistory.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("最近打开的文件")
+                        .font(.headline)
+                        .padding(.top)
+                    
+                    ForEach(Array(externalHistory.prefix(5).enumerated()), id: \.offset) { index, filePath in
+                        if FileManager.default.fileExists(atPath: filePath) {
+                            Button(action: {
+                                openRecentFile(filePath)
+                            }) {
+                                HStack {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                        .foregroundColor(.orange)
+                                    Text(URL(fileURLWithPath: filePath).lastPathComponent)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+                .padding(.top)
             }
         }
         .padding()
@@ -168,6 +273,9 @@ struct FileBrowserView: View {
     private func setupInitialFiles() {
         // 创建示例文件（如果不存在）
         FileManager.default.createSampleMarkdownFiles()
+        
+        // 清理无效的历史记录
+        FileManager.default.cleanupExternalFileHistory()
     }
     
     private func loadFiles() {
@@ -194,6 +302,9 @@ struct FileBrowserView: View {
             // 选择Markdown文件
             selectedFile = item
             openedExternalFile = nil // 清除外部文件选择
+            
+            // 保存到历史记录
+            FileManager.default.saveLastOpenedFile(item.url)
         } else {
             // 显示不支持的文件类型提示
             errorMessage = "不支持的文件类型：\(item.url.pathExtension)"
@@ -230,11 +341,48 @@ struct FileBrowserView: View {
                     if fileItem.isMarkdownFile {
                         self.openedExternalFile = fileItem
                         self.selectedFile = nil // 清除本地文件选择
+                        
+                        // 保存到历史记录
+                        FileManager.default.saveLastOpenedFile(url)
+                        FileManager.default.addToExternalFileHistory(url)
                     } else {
                         self.errorMessage = "选择的文件不是有效的 Markdown 文件"
                     }
                 }
             }
+        }
+    }
+    
+    private func handleExternalFile(_ url: URL) {
+        let fileItem = FileItem(url: url)
+        if fileItem.isMarkdownFile {
+            openedExternalFile = fileItem
+            selectedFile = nil
+        } else {
+            errorMessage = "选择的文件不是有效的 Markdown 文件"
+        }
+    }
+    
+    private func openRecentFile(_ filePath: String) {
+        let fileURL = URL(fileURLWithPath: filePath)
+        let fileItem = FileItem(url: fileURL)
+        
+        if fileItem.isMarkdownFile && FileManager.default.fileExists(atPath: filePath) {
+            // 对于外部文件，通过DocumentHandler处理安全范围访问
+            if !filePath.hasPrefix(FileManager.default.documentsDirectory.path) {
+                documentHandler.handleOpenURL(fileURL)
+            } else {
+                openedExternalFile = fileItem
+                selectedFile = nil
+                
+                // 更新历史记录（移到最前面）
+                FileManager.default.saveLastOpenedFile(fileURL)
+                FileManager.default.addToExternalFileHistory(fileURL)
+            }
+        } else {
+            errorMessage = "文件不存在或不是有效的 Markdown 文件"
+            // 清理无效的历史记录
+            FileManager.default.cleanupExternalFileHistory()
         }
     }
 }
@@ -309,4 +457,5 @@ struct FileItemRow: View {
 
 #Preview {
     FileBrowserView()
+        .environmentObject(DocumentHandler())
 } 

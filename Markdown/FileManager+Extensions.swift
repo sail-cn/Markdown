@@ -7,6 +7,14 @@
 
 import Foundation
 
+// MARK: - UserDefaults Keys
+private enum UserDefaultsKeys {
+    static let lastOpenedFilePath = "lastOpenedFilePath"
+    static let lastOpenedFileBookmark = "lastOpenedFileBookmark"
+    static let externalFileHistory = "externalFileHistory"
+    static let externalFileBookmarks = "externalFileBookmarks"
+}
+
 extension FileManager {
     /// 获取应用的Documents目录
     var documentsDirectory: URL {
@@ -48,6 +56,92 @@ extension FileManager {
                 try? content.write(to: fileURL, atomically: true, encoding: .utf8)
             }
         }
+    }
+    
+    // MARK: - 文件历史记录
+    
+    /// 保存最后打开的文件路径
+    func saveLastOpenedFile(_ url: URL) {
+        UserDefaults.standard.set(url.path, forKey: UserDefaultsKeys.lastOpenedFilePath)
+        
+        // 如果是外部文件，保存Security-Scoped Bookmark
+        if !url.path.hasPrefix(documentsDirectory.path) {
+            do {
+                let bookmarkData = try url.bookmarkData(options: .withSecurityScope)
+                UserDefaults.standard.set(bookmarkData, forKey: UserDefaultsKeys.lastOpenedFileBookmark)
+            } catch {
+                print("Failed to create bookmark for last opened file: \(error)")
+            }
+        } else {
+            // 内部文件不需要bookmark
+            UserDefaults.standard.removeObject(forKey: UserDefaultsKeys.lastOpenedFileBookmark)
+        }
+    }
+    
+    /// 获取最后打开的文件路径
+    func getLastOpenedFilePath() -> String? {
+        return UserDefaults.standard.string(forKey: UserDefaultsKeys.lastOpenedFilePath)
+    }
+    
+    /// 获取最后打开文件的安全范围URL
+    func getLastOpenedFileURL() -> URL? {
+        guard let filePath = getLastOpenedFilePath() else { return nil }
+        
+        // 如果是内部文件，直接返回URL
+        if filePath.hasPrefix(documentsDirectory.path) {
+            return URL(fileURLWithPath: filePath)
+        }
+        
+        // 如果是外部文件，尝试从bookmark恢复
+        guard let bookmarkData = UserDefaults.standard.data(forKey: UserDefaultsKeys.lastOpenedFileBookmark) else {
+            return nil
+        }
+        
+        do {
+            var isStale = false
+            let url = try URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
+            
+            if isStale {
+                print("Bookmark is stale for last opened file")
+                // 可以尝试重新创建bookmark
+            }
+            
+            return url
+        } catch {
+            print("Failed to resolve bookmark for last opened file: \(error)")
+            return nil
+        }
+    }
+    
+    /// 添加外部文件到历史记录
+    func addToExternalFileHistory(_ url: URL) {
+        var history = getExternalFileHistory()
+        let filePath = url.path
+        
+        // 移除重复项
+        history.removeAll { $0 == filePath }
+        
+        // 添加到开头
+        history.insert(filePath, at: 0)
+        
+        // 限制历史记录数量（最多10个）
+        if history.count > 10 {
+            history = Array(history.prefix(10))
+        }
+        
+        UserDefaults.standard.set(history, forKey: UserDefaultsKeys.externalFileHistory)
+    }
+    
+    /// 获取外部文件历史记录
+    func getExternalFileHistory() -> [String] {
+        return UserDefaults.standard.stringArray(forKey: UserDefaultsKeys.externalFileHistory) ?? []
+    }
+    
+    /// 清理无效的历史记录（文件不存在的）
+    func cleanupExternalFileHistory() {
+        let history = getExternalFileHistory()
+        let validPaths = history.filter { fileExists(atPath: $0) }
+        UserDefaults.standard.set(validPaths, forKey: UserDefaultsKeys.externalFileHistory)
     }
 }
 

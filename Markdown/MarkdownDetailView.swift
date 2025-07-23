@@ -18,45 +18,40 @@ struct MarkdownDetailView: View {
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
-        NavigationView {
-            Group {
-                if isLoading {
-                    ProgressView("正在加载...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let errorMessage = errorMessage {
-                    errorView(message: errorMessage)
-                } else {
-                    MarkdownRenderer(content: content, fileName: fileItem.name)
-                }
+        Group {
+            if isLoading {
+                ProgressView("正在加载...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let errorMessage = errorMessage {
+                errorView(message: errorMessage)
+            } else {
+                MarkdownRenderer(content: content, fileName: fileItem.name)
             }
-            .navigationTitle(fileItem.name)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("完成") {
-                        dismiss()
+        }
+        .navigationTitle(fileItem.name)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button("分享文件") {
+                        shareFile()
                     }
-                }
-                
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button("分享文件") {
-                            shareFile()
-                        }
-                        
-                        Button("复制内容") {
-                            copyContent()
-                        }
-                        
-                        Button("显示文件信息") {
-                            showFileInfo()
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
+                    
+                    Button("复制内容") {
+                        copyContent()
                     }
+                    
+                    Button("显示文件信息") {
+                        showFileInfo()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
             }
         }
         .onAppear {
+            loadFileContent()
+        }
+        .onChange(of: fileItem.url) { _, _ in
             loadFileContent()
         }
         .alert("提示", isPresented: $showingAlert) {
@@ -95,6 +90,28 @@ struct MarkdownDetailView: View {
         
         DispatchQueue.global(qos: .userInitiated).async {
             do {
+                // 对于外部文件，需要先获取安全范围访问权限
+                let needsSecurityScope = !self.fileItem.url.path.hasPrefix(FileManager.default.documentsDirectory.path)
+                var accessGranted = true
+                
+                if needsSecurityScope {
+                    accessGranted = self.fileItem.url.startAccessingSecurityScopedResource()
+                }
+                
+                defer {
+                    if needsSecurityScope && accessGranted {
+                        self.fileItem.url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                
+                guard accessGranted else {
+                    DispatchQueue.main.async {
+                        self.errorMessage = "无法访问文件：权限不足"
+                        self.isLoading = false
+                    }
+                    return
+                }
+                
                 let fileContent = try String(contentsOf: fileItem.url, encoding: .utf8)
                 
                 DispatchQueue.main.async {

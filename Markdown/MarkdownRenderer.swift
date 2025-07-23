@@ -42,7 +42,9 @@ struct MarkdownRenderer: View {
                     .padding(.horizontal)
                     .padding(.bottom)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.controlBackgroundColor))
     }
 }

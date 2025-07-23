@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/yvan.feng/Documents/xcode-projects/Markdown -name \"Features.md\" -type f)",
+      "Bash(find /Users/yvan.feng/Documents/xcode-projects/Markdown -name \"*.plist\" -type f)"
+    ],
+    "deny": []
+  }
+}
